@@ -280,25 +280,46 @@ async def track_matches(match_ids: list[int]):
 async def main():
     parser = argparse.ArgumentParser(description="世界杯实时事件追踪")
     grp = parser.add_mutually_exclusive_group(required=True)
-    grp.add_argument("--today",  action="store_true", help="追踪今天（UTC）的所有比赛")
-    grp.add_argument("--date",   metavar="YYYY-MM-DD", help="追踪指定日期（UTC）的所有比赛")
+    grp.add_argument("--today",  action="store_true", help="追踪今天（阿拉木图时间）的所有比赛")
+    grp.add_argument("--date",   metavar="YYYY-MM-DD", help="追踪指定日期（阿拉木图时间）的所有比赛")
     grp.add_argument("--match",  type=int, metavar="ID", help="追踪单场比赛（测试用）")
     args = parser.parse_args()
 
     if args.match:
         match_ids = [args.match]
     else:
+        # 用阿拉木图时间确定"今天"，避免凌晨漏掉 UTC 昨天的比赛
         if args.today:
-            date_str = datetime.now(UTC_TZ).strftime("%Y-%m-%d")
+            almaty_today = datetime.now(ALMATY_TZ).date()
         else:
-            date_str = args.date
+            almaty_today = datetime.strptime(args.date, "%Y-%m-%d").date()
 
-        logger.info("拉取 %s 的世界杯赛程...", date_str)
-        matches = fetch_wc_matches(date_str)
+        # 阿拉木图一天 = UTC 前一天19:00 ~ 当天19:00，跨两个UTC日期
+        # 所以同时拉"UTC昨天"和"UTC今天"，再按阿拉木图日期过滤
+        utc_dates = [
+            (almaty_today - timedelta(days=1)).strftime("%Y-%m-%d"),
+            almaty_today.strftime("%Y-%m-%d"),
+        ]
+        all_matches = []
+        seen_ids = set()
+        for d in utc_dates:
+            for m in fetch_wc_matches(d):
+                if m["id"] not in seen_ids:
+                    seen_ids.add(m["id"])
+                    all_matches.append(m)
+
+        # 过滤：只保留阿拉木图日期等于目标日期的比赛
+        def almaty_date(m):
+            dt = datetime.fromisoformat(m["utcDate"].replace("Z", "+00:00"))
+            return dt.astimezone(ALMATY_TZ).date()
+
+        matches = [m for m in all_matches if almaty_date(m) == almaty_today]
+
         if not matches:
-            logger.info("该日期没有比赛，退出")
+            logger.info("阿拉木图时间 %s 没有比赛，退出", almaty_today)
             return
 
+        logger.info("阿拉木图时间 %s，共 %d 场比赛：", almaty_today, len(matches))
         match_ids = [m["id"] for m in matches]
         for m in matches:
             logger.info(
