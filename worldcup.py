@@ -6,8 +6,8 @@
   python worldcup.py --print-today      # 只打印今日赛程，不推送（干跑验证）
   python worldcup.py --today            # 推送今日赛程到 Telegram
   python worldcup.py --test-reminder    # 找最近一场未来的比赛，发送提醒测试
-  python worldcup.py --check-reminder   # 正常检查：有比赛在 14-19 分钟内开赛就推送提醒
-                                        # （适合 GitHub Actions 每 5 分钟运行一次）
+  python worldcup.py --check-reminder   # 正常检查：开赛前 10~90 分钟内推送提醒
+                                        # （窗口宽 45 分钟，抗 GitHub Actions 延迟）
 
 GitHub Actions 定时任务说明:
   - 今日赛程：每天 03:00 UTC（= 08:00 阿拉木图）运行 --today
@@ -234,20 +234,25 @@ def format_two_day_schedule(today_games: list[dict], tomorrow_games: list[dict])
 def format_reminder(game: dict, minutes_left: int, index: int) -> str:
     """
     生成赛前提醒消息。
-    index: 第几条（1~5），minutes_left: 还有几分钟开赛
+    index: 1=1小时前提醒，2=即将开赛提醒
     """
     home  = team_cn(game.get("home_team_name_en", "?"))
     away  = team_cn(game.get("away_team_name_en", "?"))
     dt_almaty = to_almaty(parse_game_time(game))
     time_str  = dt_almaty.strftime("%H:%M")
     stage     = game_stage_cn(game)
-    bells     = "🔔" * index   # 第几条就几个铃铛，方便区分
+    if index == 1:
+        header = "🔔 赛前1小时提醒"
+        footer = "距开赛约 1 小时，准备好了吗？⚽"
+    else:
+        header = "🔔🔔 即将开赛！"
+        footer = f"还有约 {minutes_left} 分钟，快起来！⏰"
     return (
-        f"{bells} 赛前提醒（{index}/5）\n\n"
+        f"{header}\n\n"
         f"⚽ {home} vs {away}\n"
         f"🏆 {stage}\n"
         f"🕐 {time_str}（阿拉木图时间）开赛\n\n"
-        f"还有约 {minutes_left} 分钟，快起来！⏰"
+        f"{footer}"
     )
 
 
@@ -267,23 +272,20 @@ def get_games_by_date(games: list[dict], target_date) -> list[dict]:
 
 def get_reminder_games(games: list[dict]) -> list[tuple]:
     """
-    开赛前 30 分钟起，每 5 分钟推一次，共 5 次提醒。
-    每次 GitHub Actions 运行（每5分钟）只命中每场比赛的一个窗口，不重复。
+    两个宽窗口提醒，抗 GitHub Actions 延迟（实际间隔可能长达 90 分钟）：
+      窗口1：开赛前 45~90 分钟 → "1小时前提醒"
+      窗口2：开赛前 10~45 分钟 → "即将开赛提醒"
+
+    每个窗口宽 45 分钟，互不重叠，每场比赛最多各命中一次，不重复推送。
 
     返回：[(game, minutes_left, index), ...]
-      index 1 = 还有~30分钟（第1条）
-      index 2 = 还有~25分钟（第2条）
-      index 3 = 还有~20分钟（第3条）
-      index 4 = 还有~15分钟（第4条）
-      index 5 = 还有~10分钟（第5条）
+      index 1 = 还有约60分钟（窗口1）
+      index 2 = 还有约15分钟（窗口2）
     """
-    # 每个窗口：(中心分钟, 窗口范围下限, 窗口范围上限, 第几条)
+    # 每个窗口：(展示分钟, 窗口下限, 窗口上限, 第几条)
     WINDOWS = [
-        (30, 28, 33, 1),
-        (25, 23, 28, 2),
-        (20, 18, 23, 3),
-        (15, 13, 18, 4),
-        (10,  8, 13, 5),
+        (60, 45, 90, 1),
+        (15, 10, 45, 2),
     ]
     now = datetime.now(UTC_TZ)
     result = []
@@ -292,9 +294,9 @@ def get_reminder_games(games: list[dict]) -> list[tuple]:
         if dt is None:
             continue
         delta_min = (dt - now).total_seconds() / 60
-        for center, lo, hi, idx in WINDOWS:
+        for display_min, lo, hi, idx in WINDOWS:
             if lo <= delta_min < hi:
-                result.append((g, center, idx))
+                result.append((g, display_min, idx))
                 break
     return result
 
