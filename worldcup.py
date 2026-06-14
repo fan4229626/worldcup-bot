@@ -231,19 +231,23 @@ def format_two_day_schedule(today_games: list[dict], tomorrow_games: list[dict])
     return "\n".join(lines)
 
 
-def format_reminder(game: dict) -> str:
-    """生成赛前 15 分钟提醒消息。"""
+def format_reminder(game: dict, minutes_left: int, index: int) -> str:
+    """
+    生成赛前提醒消息。
+    index: 第几条（1~5），minutes_left: 还有几分钟开赛
+    """
     home  = team_cn(game.get("home_team_name_en", "?"))
     away  = team_cn(game.get("away_team_name_en", "?"))
     dt_almaty = to_almaty(parse_game_time(game))
     time_str  = dt_almaty.strftime("%H:%M")
     stage     = game_stage_cn(game)
+    bells     = "🔔" * index   # 第几条就几个铃铛，方便区分
     return (
-        f"⚡ 赛前提醒！\n\n"
+        f"{bells} 赛前提醒（{index}/5）\n\n"
         f"⚽ {home} vs {away}\n"
         f"🏆 {stage}\n"
         f"🕐 {time_str}（阿拉木图时间）开赛\n\n"
-        f"还有 15 分钟，准备好了吗？🔥"
+        f"还有约 {minutes_left} 分钟，快起来！⏰"
     )
 
 
@@ -261,13 +265,26 @@ def get_games_by_date(games: list[dict], target_date) -> list[dict]:
     return result
 
 
-def get_reminder_games(games: list[dict]) -> list[dict]:
+def get_reminder_games(games: list[dict]) -> list[tuple]:
     """
-    筛选 14～19 分钟后开赛的比赛。
+    开赛前 30 分钟起，每 5 分钟推一次，共 5 次提醒。
+    每次 GitHub Actions 运行（每5分钟）只命中每场比赛的一个窗口，不重复。
 
-    每 5 分钟运行一次时，每场比赛只会落在这个窗口里一次，不会重复推送。
-    例如：18:00 开赛 → 17:45 运行时 delta=15 分钟 → 命中 → 17:50 运行时 delta=10 → 跳过。
+    返回：[(game, minutes_left, index), ...]
+      index 1 = 还有~30分钟（第1条）
+      index 2 = 还有~25分钟（第2条）
+      index 3 = 还有~20分钟（第3条）
+      index 4 = 还有~15分钟（第4条）
+      index 5 = 还有~10分钟（第5条）
     """
+    # 每个窗口：(中心分钟, 窗口范围下限, 窗口范围上限, 第几条)
+    WINDOWS = [
+        (30, 28, 33, 1),
+        (25, 23, 28, 2),
+        (20, 18, 23, 3),
+        (15, 13, 18, 4),
+        (10,  8, 13, 5),
+    ]
     now = datetime.now(UTC_TZ)
     result = []
     for g in games:
@@ -275,8 +292,10 @@ def get_reminder_games(games: list[dict]) -> list[dict]:
         if dt is None:
             continue
         delta_min = (dt - now).total_seconds() / 60
-        if 14 <= delta_min < 19:
-            result.append(g)
+        for center, lo, hi, idx in WINDOWS:
+            if lo <= delta_min < hi:
+                result.append((g, center, idx))
+                break
     return result
 
 
@@ -338,12 +357,12 @@ async def cmd_check_reminder():
     upcoming = get_reminder_games(games)
 
     if not upcoming:
-        logger.info("当前无比赛即将开赛（14-19 分钟窗口）")
+        logger.info("当前无赛前提醒窗口命中")
         return
 
-    logger.info("发现 %d 场比赛即将开赛，推送提醒", len(upcoming))
-    for g in upcoming:
-        msg = format_reminder(g)
+    logger.info("发现 %d 条赛前提醒需推送", len(upcoming))
+    for g, minutes_left, index in upcoming:
+        msg = format_reminder(g, minutes_left, index)
         print(msg)
         await send_message(msg)
 
@@ -376,8 +395,9 @@ async def cmd_test_reminder():
     print(f"开赛时间（阿拉木图）：{to_almaty(dt).strftime('%Y-%m-%d %H:%M')}")
     print(f"距现在约 {delta_min:.0f} 分钟\n")
 
-    msg = format_reminder(g)
-    print("推送内容预览：")
+    # 测试模式：模拟第4条提醒（还有15分钟）
+    msg = format_reminder(g, 15, 4)
+    print("推送内容预览（模拟第4/5条，还有约15分钟）：")
     print("=" * 50)
     print(msg)
     print("=" * 50)
