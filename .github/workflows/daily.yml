@@ -1,0 +1,27 @@
+name: 每日赛程推送
+
+on:
+  schedule:
+    # 每天 19:00 UTC = 阿拉木图时间 00:00
+    - cron: '0 19 * * *'
+  workflow_dispatch:  # 允许在 GitHub 页面手动触发
+
+jobs:
+  send-schedule:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: 安装依赖
+        run: pip install -r requirements.txt
+
+      - name: 推送今日+明日赛程
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python worldcup.py --today
