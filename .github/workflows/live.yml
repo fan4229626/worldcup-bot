@@ -1,0 +1,37 @@
+name: 实时赛事事件追踪
+
+on:
+  workflow_dispatch:
+    inputs:
+      date:
+        description: '追踪日期 UTC（格式 YYYY-MM-DD，留空=今天）'
+        required: false
+        default: ''
+
+jobs:
+  live-track:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360   # 最长跑 6 小时，覆盖一天内大多数比赛窗口
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: 安装依赖
+        run: pip install -r requirements.txt
+
+      - name: 启动实时追踪
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          FOOTBALL_DATA_TOKEN: ${{ secrets.FOOTBALL_DATA_TOKEN }}
+        run: |
+          if [ -z "${{ inputs.date }}" ]; then
+            python live_events.py --today
+          else
+            python live_events.py --date "${{ inputs.date }}"
+          fi
