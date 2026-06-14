@@ -232,12 +232,54 @@ async def process_match(bot: Bot, tracker: MatchTracker, data: dict):
         )
 
 
+# ── 初始化去重（防止重启后重复推送历史事件）────────────────────────────────────
+async def init_tracker(tracker: MatchTracker, data: dict):
+    """
+    比赛已开始/已结束时，预先把现有事件标记为已推送。
+    这样定时任务重启后不会把历史进球/黄牌重复推送。
+    """
+    status = data.get("status", "")
+    if status not in ("IN_PROGRESS", "PAUSED", "FINISHED"):
+        return
+
+    for g in data.get("goals", []) or []:
+        key = (g["minute"], g["team"]["id"], g["scorer"]["id"])
+        tracker.sent_goals.add(key)
+
+    for b in data.get("bookings", []) or []:
+        key = (b["minute"], b["player"]["id"], b["card"])
+        tracker.sent_bookings.add(key)
+
+    if status in ("PAUSED", "FINISHED"):
+        tracker.ht1_injury_sent = True
+        tracker.halftime_sent   = True
+
+    if status == "FINISHED":
+        tracker.ht2_injury_sent = True
+        tracker.finished_sent   = True
+        tracker.done            = True
+
+    logger.info(
+        "[%d] 初始化完成（状态=%s）：跳过 %d 个进球、%d 张牌",
+        tracker.match_id, status,
+        len(tracker.sent_goals), len(tracker.sent_bookings),
+    )
+
+
 # ── 主循环 ────────────────────────────────────────────────────────────────────
 async def track_matches(match_ids: list[int]):
     bot = Bot(token=BOT_TOKEN)
     trackers = {mid: MatchTracker(match_id=mid) for mid in match_ids}
 
     logger.info("开始追踪 %d 场比赛：%s", len(match_ids), match_ids)
+
+    # 启动时先初始化——防止定时重启后重复推送已发生的事件
+    for tracker in trackers.values():
+        try:
+            data = fetch_match(tracker.match_id)
+            await init_tracker(tracker, data)
+        except Exception as e:
+            logger.error("[%d] 初始化失败: %s", tracker.match_id, e)
 
     while True:
         active = [t for t in trackers.values() if not t.done]
