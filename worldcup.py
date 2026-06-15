@@ -234,25 +234,20 @@ def format_two_day_schedule(today_games: list[dict], tomorrow_games: list[dict])
 def format_reminder(game: dict, minutes_left: int, index: int) -> str:
     """
     生成赛前提醒消息。
-    index: 1=1小时前提醒，2=即将开赛提醒
+    index: 第几条（1~5），minutes_left: 实际剩余分钟数
     """
     home  = team_cn(game.get("home_team_name_en", "?"))
     away  = team_cn(game.get("away_team_name_en", "?"))
     dt_almaty = to_almaty(parse_game_time(game))
     time_str  = dt_almaty.strftime("%H:%M")
     stage     = game_stage_cn(game)
-    if index == 1:
-        header = "🔔 赛前1小时提醒"
-        footer = "距开赛约 1 小时，准备好了吗？⚽"
-    else:
-        header = "🔔🔔 即将开赛！"
-        footer = f"还有约 {minutes_left} 分钟，快起来！⏰"
+    bells     = "🔔" * index
     return (
-        f"{header}\n\n"
+        f"{bells} 赛前提醒（{index}/5）\n\n"
         f"⚽ {home} vs {away}\n"
         f"🏆 {stage}\n"
         f"🕐 {time_str}（阿拉木图时间）开赛\n\n"
-        f"{footer}"
+        f"还有约 {minutes_left} 分钟，快起来！⏰"
     )
 
 
@@ -272,20 +267,19 @@ def get_games_by_date(games: list[dict], target_date) -> list[dict]:
 
 def get_reminder_games(games: list[dict]) -> list[tuple]:
     """
-    两个宽窗口提醒，抗 GitHub Actions 延迟（实际间隔可能长达 90 分钟）：
-      窗口1：开赛前 45~90 分钟 → "1小时前提醒"
-      窗口2：开赛前 10~45 分钟 → "即将开赛提醒"
-
-    每个窗口宽 45 分钟，互不重叠，每场比赛最多各命中一次，不重复推送。
+    5个提醒窗口，覆盖开赛前 130 分钟，每个窗口宽 25~30 分钟，
+    抗 GitHub Actions 延迟（实际触发间隔可能达 90 分钟）。
 
     返回：[(game, minutes_left, index), ...]
-      index 1 = 还有约60分钟（窗口1）
-      index 2 = 还有约15分钟（窗口2）
+      minutes_left 为实际剩余分钟数（取整），用于消息展示
     """
-    # 每个窗口：(展示分钟, 窗口下限, 窗口上限, 第几条)
+    # 每个窗口：(窗口下限, 窗口上限, 第几条)
     WINDOWS = [
-        (60, 45, 90, 1),
-        (15, 10, 45, 2),
+        (100, 130, 1),
+        ( 70, 100, 2),
+        ( 40,  70, 3),
+        ( 15,  40, 4),
+        (  5,  15, 5),
     ]
     now = datetime.now(UTC_TZ)
     result = []
@@ -294,9 +288,9 @@ def get_reminder_games(games: list[dict]) -> list[tuple]:
         if dt is None:
             continue
         delta_min = (dt - now).total_seconds() / 60
-        for display_min, lo, hi, idx in WINDOWS:
+        for lo, hi, idx in WINDOWS:
             if lo <= delta_min < hi:
-                result.append((g, display_min, idx))
+                result.append((g, int(delta_min), idx))
                 break
     return result
 

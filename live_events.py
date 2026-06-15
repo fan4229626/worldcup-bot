@@ -155,7 +155,11 @@ async def process_match(bot: Bot, tracker: MatchTracker, data: dict):
     header      = f"【{home} vs {away}】"
 
     # ── 进球 ──
-    for g in goals:
+    # football-data.org 的进球对象不含实时比分，需按时间顺序自行累计
+    home_id = data["homeTeam"]["id"]
+    sorted_goals = sorted(goals, key=lambda x: (x["minute"], x.get("extraTime") or 0))
+
+    for i, g in enumerate(sorted_goals):
         key = (g["minute"], g["team"]["id"], g["scorer"]["id"])
         if key in tracker.sent_goals:
             continue
@@ -164,15 +168,24 @@ async def process_match(bot: Bot, tracker: MatchTracker, data: dict):
         scorer = g["scorer"]["name"]
         assist = g.get("assist")
         assist_line = f"\n助攻：{assist['name']}" if assist else ""
-        curr = g.get("score") or ft
         goal_type = g.get("type", "REGULAR")
         type_tag = "（点球）" if goal_type == "PENALTY" else \
                    "（乌龙球）" if goal_type == "OWN_GOAL" else ""
 
+        # 累计到当前进球（含）的比分，乌龙球算对方进
+        h_score = a_score = 0
+        for prev in sorted_goals[:i + 1]:
+            is_own      = prev.get("type") == "OWN_GOAL"
+            by_home     = prev["team"]["id"] == home_id
+            if by_home ^ is_own:   # 主队进球 XOR 乌龙 → 主队得分
+                h_score += 1
+            else:
+                a_score += 1
+
         msg = (
             f"⚽ 进球{type_tag}！第 {g['minute']} 分钟\n"
             f"{header}\n"
-            f"比分：{home} {curr.get('home',0)} : {curr.get('away',0)} {away}\n"
+            f"比分：{home} {h_score} : {a_score} {away}\n"
             f"射手：{scorer}{assist_line}"
         )
         await send_msg(bot, msg)
